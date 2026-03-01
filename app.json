@@ -1,0 +1,27 @@
+{
+  "id": "5d331a63-bf0b-4185-967e-947f8129e54f",
+  "name": "AL Perf Analyzer",
+  "publisher": "SShadowS",
+  "version": "1.0.0.0",
+  "brief": "Analyze performance profiles with AI-powered insights",
+  "description": "Adds an 'Analyze' action to the Performance Profiler page that sends the profile to the AL Perf Analyzer service for AI-powered performance analysis.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "https://alperf.sshadows.dk",
+  "platform": "27.0.0.0",
+  "application": "27.0.0.0",
+  "runtime": "15.0",
+  "target": "Cloud",
+  "idRanges": [
+    {
+      "from": 70500,
+      "to": 70510
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  }
+}
