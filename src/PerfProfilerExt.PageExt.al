@@ -39,7 +39,7 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                 ApplicationArea = All;
                 Caption = 'Analyze with AL Perf';
                 ToolTip = 'Send the recorded profile to the AL Perf Analyzer service for AI-powered performance analysis.';
-                Image = Analyze;
+                Image = LineDescription;
                 Promoted = true;
                 PromotedCategory = Process;
                 PromotedIsBig = true;
@@ -54,10 +54,11 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                     NoDataMsg: Label 'No profile data available. Please record a profiling session and stop it before analyzing.';
                     SuccessMsg: Label 'Analysis complete. Results are displayed below.';
                 begin
-                    if not TryGetProfileData(SamplingPerfProfiler, ProfileInStream) then begin
+                    if not TryGetProfileData(SamplingPerfProfiler) then begin
                         Message(NoDataMsg);
                         exit;
                     end;
+                    ProfileInStream := SamplingPerfProfiler.GetData();
 
                     ProgressDialog.Open(AnalyzingMsg);
 
@@ -94,8 +95,8 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
         IsControlReady: Boolean;
 
     [TryFunction]
-    local procedure TryGetProfileData(var SamplingPerfProfiler: Codeunit "Sampling Performance Profiler"; var ProfileInStream: InStream)
+    local procedure TryGetProfileData(var SamplingPerfProfiler: Codeunit "Sampling Performance Profiler")
     begin
-        SamplingPerfProfiler.GetData(ProfileInStream);
+        SamplingPerfProfiler.GetData();
     end;
 }
