@@ -1,3 +1,7 @@
 .alpackages/
 .alcache/
+.altestrunner/
+.vscode/
+.snapshots/
 *.app
+rad.json

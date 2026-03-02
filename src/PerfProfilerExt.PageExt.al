@@ -9,7 +9,7 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                 Caption = 'AI Analysis Results';
                 Visible = ShowResults;
 
-                usercontrol(AnalysisResults; "Microsoft.Dynamics.Nav.Client.WebPageViewer")
+                usercontrol(AnalysisResults; WebPageViewer)
                 {
                     ApplicationArea = All;
 
@@ -43,6 +43,7 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                 Promoted = true;
                 PromotedCategory = Process;
                 PromotedIsBig = true;
+                Enabled = HasProfileData;
 
                 trigger OnAction()
                 var
@@ -52,7 +53,6 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                     ProgressDialog: Dialog;
                     AnalyzingMsg: Label 'Analyzing profile...\This may take up to 30 seconds for AI-powered insights.';
                     NoDataMsg: Label 'No profile data available. Please record a profiling session and stop it before analyzing.';
-                    SuccessMsg: Label 'Analysis complete. Results are displayed below.';
                 begin
                     if not TryGetProfileData(SamplingPerfProfiler) then begin
                         Message(NoDataMsg);
@@ -63,12 +63,11 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                     ProgressDialog.Open(AnalyzingMsg);
 
                     if AlPerfAnalyzer.AnalyzeProfile(ProfileInStream, HtmlContent) then begin
-                        ShowResults := true;
                         ProgressDialog.Close();
+                        ShowResults := true;
                         if IsControlReady then
                             CurrPage.AnalysisResults.SetContent(HtmlContent);
                         CurrPage.Update(false);
-                        Message(SuccessMsg);
                     end;
                 end;
             }
@@ -79,7 +78,6 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                 Caption = 'View in Browser';
                 ToolTip = 'Open the AL Perf Analyzer web app in your browser to upload and analyze profiles with the full web experience.';
                 Image = Web;
-                Visible = ShowResults;
 
                 trigger OnAction()
                 begin
@@ -89,10 +87,18 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
         }
     }
 
+    trigger OnAfterGetCurrRecord()
+    var
+        SamplingPerfProfiler: Codeunit "Sampling Performance Profiler";
+    begin
+        HasProfileData := TryGetProfileData(SamplingPerfProfiler);
+    end;
+
     var
         HtmlContent: Text;
         ShowResults: Boolean;
         IsControlReady: Boolean;
+        HasProfileData: Boolean;
 
     [TryFunction]
     local procedure TryGetProfileData(var SamplingPerfProfiler: Codeunit "Sampling Performance Profiler")
