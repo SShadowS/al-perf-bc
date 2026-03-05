@@ -72,6 +72,29 @@ pageextension 70500 "Perf Profiler AL Perf Ext" extends "Performance Profiler"
                 end;
             }
 
+            action(DownloadAnalysis)
+            {
+                ApplicationArea = All;
+                Caption = 'Download Analysis';
+                ToolTip = 'Download the AI analysis report as an HTML file.';
+                Image = ExportFile;
+                Enabled = ShowResults;
+
+                trigger OnAction()
+                var
+                    TempBlob: Codeunit "Temp Blob";
+                    OutStr: OutStream;
+                    InStr: InStream;
+                    FileName: Text;
+                begin
+                    TempBlob.CreateOutStream(OutStr, TextEncoding::UTF8);
+                    OutStr.WriteText(HtmlContent);
+                    TempBlob.CreateInStream(InStr);
+                    FileName := 'AL-Perf-Analysis.html';
+                    DownloadFromStream(InStr, 'Download Analysis Report', '', 'HTML Files (*.html)|*.html', FileName);
+                end;
+            }
+
             action(ViewInBrowser)
             {
                 ApplicationArea = All;
