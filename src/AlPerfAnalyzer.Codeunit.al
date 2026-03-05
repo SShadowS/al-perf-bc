@@ -143,7 +143,7 @@ codeunit 70500 "Al Perf Analyzer"
 
     local procedure BuildBatchMultipartBody(var PerfProfile: Record "Performance Profiles"; var TempBlob: Codeunit "Temp Blob"; var ContentType: Text; var ValidProfileCount: Integer)
     var
-        PerfProfilerSchedule: Record "Perf. Profiler Schedule";
+        PerfProfilerSchedule: Record "Performance Profile Scheduler";
         OutStr: OutStream;
         ProfileInStream: InStream;
         Boundary: Text;
