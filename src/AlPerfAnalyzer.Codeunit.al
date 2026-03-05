@@ -180,7 +180,7 @@ codeunit 70500 "Al Perf Analyzer"
                     MetadataObj.Add('userName', PerfProfile."User Name");
                     MetadataObj.Add('clientSessionId', PerfProfile."Client Session ID");
 
-                    if PerfProfile."Schedule ID" <> '' then begin
+                    if not IsNullGuid(PerfProfile."Schedule ID") then begin
                         if PerfProfilerSchedule.Get(PerfProfile."Schedule ID") then
                             MetadataObj.Add('scheduleDescription', PerfProfilerSchedule.Description);
                     end;
