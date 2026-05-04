@@ -92,6 +92,16 @@ ApiBaseUrl: Label 'https://your-host.example.com', Locked = true;
 - [al-perf](https://github.com/SShadowS/al-perf) — The analyzer CLI, MCP server, web app, and library
 - [alperf.sshadows.dk](https://alperf.sshadows.dk) — Hosted web app
 
+## POC Continuous Monitoring (auto-ship)
+
+Open `AL Perf Ship Setup Card` page → set Tenant Code, Server URL Base, and the Bearer Secret (write-only). Click Register Tenant. Toggle Enabled.
+
+Wire a Job Queue Entry to Codeunit 70503 `AL Perf Auto Ship` to run every 5 min.
+
+Decrypt + view: `AL Perf Ship Log List` page → Open Profile.
+
+See [docs/superpowers/specs/2026-04-13-poc-scope.md](https://github.com/SShadowS/al-perf/blob/master/docs/superpowers/specs/2026-04-13-poc-scope.md) in the al-perf repo for scope, limits, and roadmap.
+
 ## License
 
 MIT
