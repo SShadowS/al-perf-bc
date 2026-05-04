@@ -239,18 +239,30 @@ codeunit 70503 "AL Perf Auto Ship"
     procedure OpenProfile(ShipLog: Record "AL Perf Ship Log")
     var
         Setup: Record "AL Perf Ship Setup";
+        Crypto: Codeunit "AL Perf Crypto";
+        SamplingProfiler: Codeunit "Sampling Performance Profiler";
+        ProfilerPage: Page "Performance Profiler";
         Client: HttpClient;
         RequestMsg: HttpRequestMessage;
         ResponseMsg: HttpResponseMessage;
         Headers: HttpHeaders;
-        TempBlob: Codeunit "Temp Blob";
-        BlobInStream: InStream;
-        BlobOutStream: OutStream;
-        SamplingProfiler: Codeunit "Sampling Performance Profiler";
-        ProfilerPage: Page "Performance Profiler";
-        Url: Text;
+        ResponseText: Text;
         StatusCode: Integer;
+        Url: Text;
         ActivityIdText: Text;
+        Json: JsonObject;
+        TokenValue: JsonToken;
+        ManifestBase64: Text;
+        WrappedBase64: Text;
+        BlobIv, BlobTag, BlobCipher: Text;
+        ResIv, ResTag, ResCipher: Text;
+        Base64: Codeunit "Base64 Convert";
+        WrappedTempBlob, ManifestTempBlob, BlobCipherTempBlob, ResultCipherTempBlob: Codeunit "Temp Blob";
+        WrappedOut, ManifestOut, BlobCipherOut, ResultCipherOut: OutStream;
+        WrappedIn, ManifestIn, BlobCipherIn, ResultCipherIn: InStream;
+        PlainBlobTempBlob, PlainResultTempBlob: Codeunit "Temp Blob";
+        PlainBlobOut, PlainResultOut: OutStream;
+        PlainBlobIn: InStream;
     begin
         Setup := Setup.GetOrCreate();
         ActivityIdText := LowerCase(DelChr(Format(ShipLog."Activity ID"), '=', '{}'));
@@ -261,19 +273,53 @@ codeunit 70503 "AL Perf Auto Ship"
         Headers.Add('Authorization', 'Bearer ' + GetBearerSecret());
 
         if not Client.Send(RequestMsg, ResponseMsg) then
-            Error('Connection to %1 failed', Url);
-
+            Error('Connection failed.');
         StatusCode := ResponseMsg.HttpStatusCode();
+        ResponseMsg.Content().ReadAs(ResponseText);
         if (StatusCode < 200) or (StatusCode >= 300) then
-            Error('Server returned HTTP %1 fetching profile', StatusCode);
+            Error('Server returned HTTP %1.', StatusCode);
 
-        TempBlob.CreateOutStream(BlobOutStream);
-        ResponseMsg.Content().ReadAs(BlobInStream);
-        CopyStream(BlobOutStream, BlobInStream);
-        TempBlob.CreateInStream(BlobInStream);
+        if not Json.ReadFrom(ResponseText) then
+            Error('Server response is not JSON.');
 
-        SamplingProfiler.SetData(BlobInStream);
-        ProfilerPage.SetData(BlobInStream);
+        Json.Get('manifest', TokenValue); ManifestBase64 := TokenValue.AsValue().AsText();
+        Json.Get('wrapped', TokenValue); WrappedBase64 := TokenValue.AsValue().AsText();
+        Json.Get('blob', TokenValue); ExtractIvTagCipher(TokenValue.AsObject(), BlobIv, BlobTag, BlobCipher);
+        Json.Get('result', TokenValue); ExtractIvTagCipher(TokenValue.AsObject(), ResIv, ResTag, ResCipher);
+
+        // Decode binaries to InStreams
+        WrappedTempBlob.CreateOutStream(WrappedOut); Base64.FromBase64(WrappedBase64, WrappedOut); WrappedTempBlob.CreateInStream(WrappedIn);
+        ManifestTempBlob.CreateOutStream(ManifestOut); Base64.FromBase64(ManifestBase64, ManifestOut); ManifestTempBlob.CreateInStream(ManifestIn);
+        BlobCipherTempBlob.CreateOutStream(BlobCipherOut); Base64.FromBase64(BlobCipher, BlobCipherOut); BlobCipherTempBlob.CreateInStream(BlobCipherIn);
+        ResultCipherTempBlob.CreateOutStream(ResultCipherOut); Base64.FromBase64(ResCipher, ResultCipherOut); ResultCipherTempBlob.CreateInStream(ResultCipherIn);
+
+        PlainBlobTempBlob.CreateOutStream(PlainBlobOut);
+        PlainResultTempBlob.CreateOutStream(PlainResultOut);
+
+        if not Crypto.DecryptBundle(
+            WrappedIn, ManifestIn,
+            BlobIv, BlobTag, BlobCipherIn,
+            ResIv, ResTag, ResultCipherIn,
+            PlainBlobOut, PlainResultOut)
+        then begin
+            ShipLog.Status := ShipLog.Status::Failed;
+            ShipLog."Error Message" := 'HMAC mismatch — tampered or wrong key';
+            ShipLog.Modify();
+            Error('Decryption failed: HMAC mismatch.');
+        end;
+
+        PlainBlobTempBlob.CreateInStream(PlainBlobIn);
+        SamplingProfiler.SetData(PlainBlobIn);
+        ProfilerPage.SetData(PlainBlobIn);
         ProfilerPage.Run();
+    end;
+
+    local procedure ExtractIvTagCipher(Obj: JsonObject; var Iv: Text; var Tag: Text; var Cipher: Text)
+    var
+        T: JsonToken;
+    begin
+        Obj.Get('iv', T); Iv := T.AsValue().AsText();
+        Obj.Get('tag', T); Tag := T.AsValue().AsText();
+        Obj.Get('ciphertext', T); Cipher := T.AsValue().AsText();
     end;
 }
