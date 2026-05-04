@@ -18,6 +18,12 @@ page 70503 "AL Perf Ship Setup Card"
                 field(Enabled; Rec.Enabled) { ApplicationArea = All; ToolTip = 'Master switch for the auto-ship Job Queue.'; }
                 field("Tenant Code"; Rec."Tenant Code") { ApplicationArea = All; ToolTip = 'Identifier registered with al-perf service. Must match the tenantCode used at registration.'; }
                 field("Server URL Base"; Rec."Server URL Base") { ApplicationArea = All; ToolTip = 'Base URL of the al-perf web server, e.g. https://alperf.example.com'; }
+                field("Bearer Secret (write-only)"; Rec."Bearer Secret (write-only)")
+                {
+                    ApplicationArea = All;
+                    ToolTip = 'POC: paste the bearer secret here. It is stored to IsolatedStorage and the field is cleared on save.';
+                    ExtendedDatatype = Masked;
+                }
             }
             group(Status)
             {
@@ -33,27 +39,6 @@ page 70503 "AL Perf Ship Setup Card"
     {
         area(Processing)
         {
-            action(SetBearerSecret)
-            {
-                Caption = 'Set Bearer Secret';
-                ApplicationArea = All;
-                Image = EncryptionKeys;
-
-                trigger OnAction()
-                var
-                    AutoShip: Codeunit "AL Perf Auto Ship";
-                    InputDialog: Page "Strings Input";
-                    Secret: Text;
-                begin
-                    if not GetSecretInput(Secret) then
-                        exit;
-                    if Secret = '' then
-                        Error('Secret cannot be empty.');
-                    AutoShip.SetBearerSecret(Secret);
-                    Message('Bearer secret stored.');
-                end;
-            }
-
             action(Register)
             {
                 Caption = 'Register Tenant';
@@ -98,32 +83,6 @@ page 70503 "AL Perf Ship Setup Card"
     begin
         Setup := Setup.GetOrCreate();
         Rec := Setup;
-    end;
-
-    local procedure GetSecretInput(var Secret: Text): Boolean
-    var
-        Input: Page "Strings Input";
-    begin
-        // Inline simple dialog: AL has no built-in password prompt; for POC, prompt via Confirm-style.
-        Secret := '';
-        if not InputDialog(Secret) then
-            exit(false);
-        exit(true);
-    end;
-
-    local procedure InputDialog(var Value: Text): Boolean
-    var
-        TextBuilder: TextBuilder;
-        Q: Text;
-    begin
-        // Simple input via Dialog. Fall back to a single-line input modal.
-        Q := 'Bearer secret (POC)';
-        // Use the platform CreateInput once available; fallback uses SetText/GetText
-        Value := CopyStr(Q, 1, MaxStrLen(Value)); // placeholder so compiler doesn't drop var
-        Clear(Value);
-        // For POC simplicity, prompt via Message and expect user to use Set Bearer Secret action with parameter via configuration.
-        // If your environment supports Page "Edit Text", use it here.
-        exit(Confirm('A dialog cannot be shown in this AL version. Set the secret via the test runner / config, or extend this action. Continue with empty secret?', false));
     end;
 
     local procedure PocRegister(SetupRec: Record "AL Perf Ship Setup")

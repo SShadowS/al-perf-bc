@@ -44,6 +44,22 @@ table 70503 "AL Perf Ship Setup"
             Editable = false;
             DataClassification = SystemMetadata;
         }
+        field(70; "Bearer Secret (write-only)"; Text[200])
+        {
+            Caption = 'Bearer Secret (write-only)';
+            DataClassification = CustomerContent;
+
+            trigger OnValidate()
+            var
+                AutoShip: Codeunit "AL Perf Auto Ship";
+            begin
+                if "Bearer Secret (write-only)" = '' then
+                    exit;
+                AutoShip.SetBearerSecret("Bearer Secret (write-only)");
+                Clear("Bearer Secret (write-only)");
+                Modify();
+            end;
+        }
     }
 
     keys
