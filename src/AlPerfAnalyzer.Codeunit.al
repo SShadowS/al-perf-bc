@@ -3,12 +3,12 @@ codeunit 70500 "Al Perf Analyzer"
     Access = Public;
 
     var
-        ApiBaseUrl: Label 'https://alperf.sshadows.dk', Locked = true;
+        ApiBaseUrl: Label 'https://alperfdev.sshadows.dk', Locked = true;
         ApiPath: Label '/api/analyze?format=html', Locked = true;
         CrLf: Text[2];
         NoProfileDataErr: Label 'No profile data available. Please record a profiling session first.';
         ConnectionErr: Label 'Could not connect to the AL Perf Analyzer service at %1. Please check your network connection and try again.', Comment = '%1 = API URL';
-        HttpErrorErr: Label 'The AL Perf Analyzer service returned an error (HTTP %1).\n\n%2', Comment = '%1 = HTTP status code, %2 = response excerpt';
+        HttpErrorErr: Label 'The AL Perf Analyzer service returned an error (HTTP %1).\\%2', Comment = '%1 = HTTP status code, %2 = response excerpt';
         TimeoutErr: Label 'The request to the AL Perf Analyzer service timed out. The analysis can take up to 30 seconds for AI-powered insights. Please try again.';
         ApiBatchPath: Label '/api/analyze-batch?format=html', Locked = true;
         LargeBatchConfirmQst: Label 'You are about to analyze %1 profiles. This may take several minutes.\Do you want to continue?', Comment = '%1 = number of profiles';
@@ -18,6 +18,12 @@ codeunit 70500 "Al Perf Analyzer"
     begin
     end;
 
+    /// <summary>
+    /// Sends a single performance profile to the AL Perf Analyzer service for AI-powered analysis.
+    /// </summary>
+    /// <param name="ProfileInStream">An InStream containing the .alcpuprofile data to analyze.</param>
+    /// <param name="HtmlResult">Returns the HTML-formatted analysis report.</param>
+    /// <returns>True if the analysis completed successfully.</returns>
     procedure AnalyzeProfile(ProfileInStream: InStream; var HtmlResult: Text): Boolean
     var
         Client: HttpClient;
@@ -210,6 +216,7 @@ codeunit 70500 "Al Perf Analyzer"
             repeat
                 if PerfProfile.Profile.HasValue() then begin
                     ProfileIndex += 1;
+                    PerfProfile.CalcFields(Profile);
                     PerfProfile.Profile.CreateInStream(ProfileInStream);
 
                     OutStr.WriteText(CrLf + '--' + Boundary + CrLf);
