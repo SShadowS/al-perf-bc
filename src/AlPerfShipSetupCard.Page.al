@@ -39,6 +39,13 @@ page 70503 "AL Perf Ship Setup Card"
                     ToolTip = 'True when the per-tenant token issued at registration is stored. Without it, auto-ship falls back to the registration secret, which the server rejects unless AL_PERF_ALLOW_SHARED_SECRET=1.';
                 }
             }
+            group(Canary)
+            {
+                Caption = 'Canary';
+                field("Canary Enabled"; Rec."Canary Enabled") { ApplicationArea = All; ToolTip = 'Enables the self-profiling canary. Independent of the Enabled switch above: that gates the OnPrem-only scheduler path, while the canary also works in SaaS.'; }
+                field("Canary Workload Codeunit ID"; Rec."Canary Workload Codeunit ID") { ApplicationArea = All; ToolTip = 'Codeunit executed under the profiler. Leave 0 to use the built-in AL Perf Canary Workload.'; }
+                field("Canary Description"; Rec."Canary Description") { ApplicationArea = All; ToolTip = 'Activity description stamped on canary profiles shipped to the server.'; }
+            }
         }
     }
 
@@ -71,6 +78,24 @@ page 70503 "AL Perf Ship Setup Card"
                     AutoShip.ShipPending();
                     CurrPage.Update();
                     Message('Auto-ship run completed. See AL Perf Ship Log for results.');
+                end;
+            }
+
+            action(RunCanaryNow)
+            {
+                Caption = 'Run Canary Now';
+                ApplicationArea = All;
+                Image = Start;
+
+                trigger OnAction()
+                var
+                    Canary: Codeunit "AL Perf Canary";
+                begin
+                    if not Rec."Canary Enabled" then
+                        Error('Enable the canary before running it.');
+                    Canary.RunNow();
+                    CurrPage.Update();
+                    Message('Canary run completed. See AL Perf Ship Log for results.');
                 end;
             }
 
