@@ -16,10 +16,23 @@ codeunit 70506 "AL Perf Canary Workload"
         Payload: JsonObject;
         Parsed: JsonObject;
         PayloadText: Text;
+        StartTime: DateTime;
+        TargetDurationMs: Integer;
+        MaxIterations: Integer;
         i: Integer;
         Total: Integer;
     begin
-        for i := 1 to 1000 do begin
+        // Duration-bound rather than iteration-bound: iteration cost depends on live
+        // "AL Perf Ship Log" row counts, so a fixed iteration count can finish in well
+        // under a second on a fresh environment, defeating the 1-3 s sampling window.
+        TargetDurationMs := 2000;
+        // Hard safety cap so a clock anomaly (e.g. system clock jump) can never spin forever.
+        MaxIterations := 1000000;
+
+        StartTime := CurrentDateTime;
+        repeat
+            i += 1;
+
             ShipLog.Reset();
             ShipLog.SetRange(Status, ShipLog.Status::Shipped);
             Total += ShipLog.Count();
@@ -30,6 +43,6 @@ codeunit 70506 "AL Perf Canary Workload"
             Payload.Add('timestamp', Format(CurrentDateTime, 0, 9));
             Payload.WriteTo(PayloadText);
             if Parsed.ReadFrom(PayloadText) then;
-        end;
+        until ((CurrentDateTime - StartTime) >= TargetDurationMs) or (i >= MaxIterations);
     end;
 }
