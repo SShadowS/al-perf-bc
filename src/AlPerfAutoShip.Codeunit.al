@@ -6,6 +6,7 @@ codeunit 70503 "AL Perf Auto Ship"
     var
         CrLf: Text[2];
         BearerSecretKeyTok: Label 'al-perf-poc-bearer-secret', Locked = true;
+        TenantTokenKeyTok: Label 'al-perf-tenant-token', Locked = true;
 
     trigger OnRun()
     begin
@@ -98,7 +99,7 @@ codeunit 70503 "AL Perf Auto Ship"
         RequestMsg.Content(Content);
 
         RequestMsg.GetHeaders(Headers);
-        Headers.Add('Authorization', 'Bearer ' + GetBearerSecret());
+        Headers.Add('Authorization', 'Bearer ' + GetAuthBearer());
         Headers.Add('X-Tenant-Id', Setup."Tenant Code");
         Headers.Add('X-Idempotency-Key', LowerCase(DelChr(Format(PerfProfile."Activity ID"), '=', '{}')));
 
@@ -230,8 +231,33 @@ codeunit 70503 "AL Perf Auto Ship"
         Secret: Text;
     begin
         if not IsolatedStorage.Get(BearerSecretKeyTok, DataScope::Module, Secret) then
-            Error('Bearer secret is not set. Configure it via the AL Perf Ship Setup card.');
+            Error('Registration secret is not set. Configure it via the AL Perf Ship Setup card.');
         exit(Secret);
+    end;
+
+    /// Per-tenant token issued once by /api/tenants/register; stored on registration.
+    procedure SetTenantToken(NewToken: Text)
+    begin
+        IsolatedStorage.Set(TenantTokenKeyTok, NewToken, DataScope::Module);
+    end;
+
+    procedure HasTenantToken(): Boolean
+    var
+        Token: Text;
+    begin
+        exit(IsolatedStorage.Get(TenantTokenKeyTok, DataScope::Module, Token));
+    end;
+
+    /// Bearer for ingest and profile downloads: the per-tenant token. Falls back
+    /// to the legacy shared secret only when no token is stored — the server then
+    /// needs AL_PERF_ALLOW_SHARED_SECRET=1 or the call is rejected with 401.
+    procedure GetAuthBearer(): Text
+    var
+        Token: Text;
+    begin
+        if IsolatedStorage.Get(TenantTokenKeyTok, DataScope::Module, Token) then
+            exit(Token);
+        exit(GetBearerSecret());
     end;
 
     /// Phase B: download plaintext profile and pipe to Performance Profiler page (v0).
@@ -270,7 +296,7 @@ codeunit 70503 "AL Perf Auto Ship"
         RequestMsg.Method('GET');
         RequestMsg.SetRequestUri(Url);
         RequestMsg.GetHeaders(Headers);
-        Headers.Add('Authorization', 'Bearer ' + GetBearerSecret());
+        Headers.Add('Authorization', 'Bearer ' + GetAuthBearer());
 
         if not Client.Send(RequestMsg, ResponseMsg) then
             Error('Connection failed.');

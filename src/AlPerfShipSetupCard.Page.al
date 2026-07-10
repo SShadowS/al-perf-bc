@@ -21,7 +21,7 @@ page 70503 "AL Perf Ship Setup Card"
                 field("Bearer Secret (write-only)"; Rec."Bearer Secret (write-only)")
                 {
                     ApplicationArea = All;
-                    ToolTip = 'POC: paste the bearer secret here. It is stored to IsolatedStorage and the field is cleared on save.';
+                    ToolTip = 'Registration secret for /api/tenants/register. Stored to IsolatedStorage; the field is cleared on save. Ingest authenticates with the per-tenant token captured at registration, not this secret.';
                     ExtendedDatatype = Masked;
                 }
             }
@@ -31,6 +31,13 @@ page 70503 "AL Perf Ship Setup Card"
                 field("Last Run DateTime"; Rec."Last Run DateTime") { ApplicationArea = All; }
                 field("Last Error"; Rec."Last Error") { ApplicationArea = All; }
                 field("Public Key Fingerprint"; Rec."Public Key Fingerprint") { ApplicationArea = All; ToolTip = 'Fingerprint of the current public key registered with the server. Set when keypair is generated (v1).'; }
+                field(TenantTokenStored; TenantTokenStored)
+                {
+                    ApplicationArea = All;
+                    Caption = 'Tenant Token Stored';
+                    Editable = false;
+                    ToolTip = 'True when the per-tenant token issued at registration is stored. Without it, auto-ship falls back to the registration secret, which the server rejects unless AL_PERF_ALLOW_SHARED_SECRET=1.';
+                }
             }
         }
     }
@@ -77,12 +84,17 @@ page 70503 "AL Perf Ship Setup Card"
         }
     }
 
+    var
+        TenantTokenStored: Boolean;
+
     trigger OnOpenPage()
     var
         Setup: Record "AL Perf Ship Setup";
+        AutoShip: Codeunit "AL Perf Auto Ship";
     begin
         Setup := Setup.GetOrCreate();
         Rec := Setup;
+        TenantTokenStored := AutoShip.HasTenantToken();
     end;
 
     local procedure PocRegister(SetupRec: Record "AL Perf Ship Setup")
@@ -95,6 +107,8 @@ page 70503 "AL Perf Ship Setup Card"
         Content: HttpContent;
         Headers: HttpHeaders;
         Body: JsonObject;
+        ResponseJson: JsonObject;
+        TokenValue: JsonToken;
         BodyText: Text;
         StatusCode: Integer;
         ResponseText: Text;
@@ -134,6 +148,14 @@ page 70503 "AL Perf Ship Setup Card"
 
         SetupRec."Public Key Fingerprint" := CopyStr(Crypto.ComputeFingerprint(PublicKeyXml), 1, 80);
         SetupRec.Modify();
-        Message('Tenant registered.');
+
+        // The per-tenant token is issued exactly once, in this response. Store it —
+        // all ingest and profile-download calls authenticate with it from now on.
+        if ResponseJson.ReadFrom(ResponseText) and ResponseJson.Get('tenantToken', TokenValue) then begin
+            AutoShip.SetTenantToken(TokenValue.AsValue().AsText());
+            TenantTokenStored := true;
+            Message('Tenant registered. Per-tenant token stored — auto-ship authenticates with it.');
+        end else
+            Message('Tenant registered, but the server returned no tenant token. Auto-ship will fall back to the registration secret; the server rejects that unless AL_PERF_ALLOW_SHARED_SECRET=1.');
     end;
 }

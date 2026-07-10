@@ -46,7 +46,7 @@ table 70503 "AL Perf Ship Setup"
         }
         field(70; "Bearer Secret (write-only)"; Text[200])
         {
-            Caption = 'Bearer Secret (write-only)';
+            Caption = 'Registration Secret (write-only)';
             DataClassification = CustomerContent;
 
             trigger OnValidate()
