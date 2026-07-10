@@ -59,6 +59,73 @@ codeunit 70503 "AL Perf Auto Ship"
     local procedure ShipOne(Setup: Record "AL Perf Ship Setup"; var PerfProfile: Record "Performance Profiles"): Boolean
     var
         ShipLog: Record "AL Perf Ship Log";
+        ManifestJson: JsonObject;
+        ProfileInStream: InStream;
+    begin
+        if not InitShipLog(ShipLog, PerfProfile) then
+            exit(false);
+
+        PerfProfile.CalcFields(Profile);
+        if not PerfProfile.Profile.HasValue() then begin
+            ShipLog.Status := ShipLog.Status::Failed;
+            ShipLog."Error Message" := 'Profile blob empty';
+            ShipLog.Modify();
+            exit(false);
+        end;
+
+        ManifestJson := BuildSchedulerManifest(PerfProfile);
+        PerfProfile.Profile.CreateInStream(ProfileInStream);
+        exit(ShipProfile(Setup, ShipLog, ManifestJson, ProfileInStream));
+    end;
+
+    local procedure BuildSchedulerManifest(var PerfProfile: Record "Performance Profiles") ManifestObj: JsonObject
+    var
+        PerfSched: Record "Performance Profile Scheduler";
+    begin
+        PerfProfile.CalcFields("User Name");
+        ManifestObj.Add('activityId', LowerCase(DelChr(Format(PerfProfile."Activity ID"), '=', '{}')));
+        ManifestObj.Add('activityType', MapClientType(PerfProfile."Client Type"));
+        ManifestObj.Add('activityDescription', PerfProfile."Activity Description");
+        ManifestObj.Add('startTime', Format(PerfProfile."Starting Date-Time", 0, 9));
+        ManifestObj.Add('activityDuration', PerfProfile."Activity Duration");
+        ManifestObj.Add('alExecutionDuration', PerfProfile.Duration);
+        ManifestObj.Add('sqlCallDuration', PerfProfile."Sql Call Duration");
+        ManifestObj.Add('sqlCallCount', PerfProfile."Sql Statement Number");
+        ManifestObj.Add('httpCallDuration', PerfProfile."Http Call Duration");
+        ManifestObj.Add('httpCallCount', PerfProfile."Http Call Number");
+        ManifestObj.Add('userName', PerfProfile."User Name");
+        ManifestObj.Add('clientSessionId', PerfProfile."Client Session ID");
+        if not IsNullGuid(PerfProfile."Schedule ID") then begin
+            ManifestObj.Add('scheduleId', LowerCase(DelChr(Format(PerfProfile."Schedule ID"), '=', '{}')));
+            if PerfSched.Get(PerfProfile."Schedule ID") then
+                ManifestObj.Add('scheduleDescription', PerfSched.Description);
+        end;
+    end;
+
+    local procedure InitShipLog(var ShipLog: Record "AL Perf Ship Log"; PerfProfile: Record "Performance Profiles"): Boolean
+    begin
+        if ShipLog.Get(PerfProfile."Activity ID") then begin
+            if ShipLog.Status = ShipLog.Status::Shipped then
+                exit(false);
+        end else begin
+            ShipLog.Init();
+            ShipLog."Activity ID" := PerfProfile."Activity ID";
+            ShipLog.Insert();
+        end;
+        ShipLog."Schedule ID" := PerfProfile."Schedule ID";
+        ShipLog."Activity Description" := CopyStr(PerfProfile."Activity Description", 1, MaxStrLen(ShipLog."Activity Description"));
+        ShipLog."Starting Date-Time" := PerfProfile."Starting Date-Time";
+        ShipLog.Status := ShipLog.Status::Pending;
+        ShipLog."Profile Size (bytes)" := 0;  // set in caller after CalcFields if you have a size source
+        exit(true);
+    end;
+
+    /// Transport core shared by the scheduler path (ShipOne) and the canary
+    /// (codeunit "AL Perf Canary"). ShipLog must already be inserted; its
+    /// "Activity ID" drives the idempotency header and must match
+    /// ManifestJson.activityId. Never clears "Error Message" on success.
+    internal procedure ShipProfile(Setup: Record "AL Perf Ship Setup"; var ShipLog: Record "AL Perf Ship Log"; ManifestJson: JsonObject; ProfileInStream: InStream): Boolean
+    var
         BodyTempBlob: Codeunit "Temp Blob";
         Client: HttpClient;
         RequestMsg: HttpRequestMessage;
@@ -71,20 +138,7 @@ codeunit 70503 "AL Perf Auto Ship"
         StatusCode: Integer;
         Url: Text;
     begin
-        InitCrLf();
-
-        if not InitShipLog(ShipLog, PerfProfile) then
-            exit(false);
-
-        PerfProfile.CalcFields(Profile);
-        if not PerfProfile.Profile.HasValue() then begin
-            ShipLog.Status := ShipLog.Status::Failed;
-            ShipLog."Error Message" := 'Profile blob empty';
-            ShipLog.Modify();
-            exit(false);
-        end;
-
-        BuildMultipartBody(PerfProfile, BodyTempBlob, ContentType);
+        BuildMultipartBody(ManifestJson, ProfileInStream, BodyTempBlob, ContentType);
         BodyTempBlob.CreateInStream(BodyInStream);
 
         Content.WriteFrom(BodyInStream);
@@ -101,7 +155,7 @@ codeunit 70503 "AL Perf Auto Ship"
         RequestMsg.GetHeaders(Headers);
         Headers.Add('Authorization', 'Bearer ' + GetAuthBearer());
         Headers.Add('X-Tenant-Id', Setup."Tenant Code");
-        Headers.Add('X-Idempotency-Key', LowerCase(DelChr(Format(PerfProfile."Activity ID"), '=', '{}')));
+        Headers.Add('X-Idempotency-Key', LowerCase(DelChr(Format(ShipLog."Activity ID"), '=', '{}')));
 
         Client.Timeout(120000);
         if not Client.Send(RequestMsg, ResponseMsg) then begin
@@ -130,58 +184,19 @@ codeunit 70503 "AL Perf Auto Ship"
         exit(false);
     end;
 
-    local procedure InitShipLog(var ShipLog: Record "AL Perf Ship Log"; PerfProfile: Record "Performance Profiles"): Boolean
-    begin
-        if ShipLog.Get(PerfProfile."Activity ID") then begin
-            if ShipLog.Status = ShipLog.Status::Shipped then
-                exit(false);
-        end else begin
-            ShipLog.Init();
-            ShipLog."Activity ID" := PerfProfile."Activity ID";
-            ShipLog.Insert();
-        end;
-        ShipLog."Schedule ID" := PerfProfile."Schedule ID";
-        ShipLog."Activity Description" := CopyStr(PerfProfile."Activity Description", 1, MaxStrLen(ShipLog."Activity Description"));
-        ShipLog."Starting Date-Time" := PerfProfile."Starting Date-Time";
-        ShipLog.Status := ShipLog.Status::Pending;
-        ShipLog."Profile Size (bytes)" := 0;  // set in caller after CalcFields if you have a size source
-        exit(true);
-    end;
-
-    local procedure BuildMultipartBody(var PerfProfile: Record "Performance Profiles"; var TempBlob: Codeunit "Temp Blob"; var ContentType: Text)
+    local procedure BuildMultipartBody(ManifestJson: JsonObject; ProfileInStream: InStream; var TempBlob: Codeunit "Temp Blob"; var ContentType: Text)
     var
         OutStr: OutStream;
-        ProfileInStream: InStream;
         Boundary: Text;
         BoundaryGuid: Guid;
-        ManifestObj: JsonObject;
         ManifestText: Text;
-        PerfSched: Record "Performance Profile Scheduler";
     begin
+        InitCrLf();
         BoundaryGuid := CreateGuid();
         Boundary := DelChr(Format(BoundaryGuid), '=', '{}');
         TempBlob.CreateOutStream(OutStr, TextEncoding::UTF8);
 
-        // Manifest
-        PerfProfile.CalcFields("User Name");
-        ManifestObj.Add('activityId', LowerCase(DelChr(Format(PerfProfile."Activity ID"), '=', '{}')));
-        ManifestObj.Add('activityType', MapClientType(PerfProfile."Client Type"));
-        ManifestObj.Add('activityDescription', PerfProfile."Activity Description");
-        ManifestObj.Add('startTime', Format(PerfProfile."Starting Date-Time", 0, 9));
-        ManifestObj.Add('activityDuration', PerfProfile."Activity Duration");
-        ManifestObj.Add('alExecutionDuration', PerfProfile.Duration);
-        ManifestObj.Add('sqlCallDuration', PerfProfile."Sql Call Duration");
-        ManifestObj.Add('sqlCallCount', PerfProfile."Sql Statement Number");
-        ManifestObj.Add('httpCallDuration', PerfProfile."Http Call Duration");
-        ManifestObj.Add('httpCallCount', PerfProfile."Http Call Number");
-        ManifestObj.Add('userName', PerfProfile."User Name");
-        ManifestObj.Add('clientSessionId', PerfProfile."Client Session ID");
-        if not IsNullGuid(PerfProfile."Schedule ID") then begin
-            ManifestObj.Add('scheduleId', LowerCase(DelChr(Format(PerfProfile."Schedule ID"), '=', '{}')));
-            if PerfSched.Get(PerfProfile."Schedule ID") then
-                ManifestObj.Add('scheduleDescription', PerfSched.Description);
-        end;
-        ManifestObj.WriteTo(ManifestText);
+        ManifestJson.WriteTo(ManifestText);
 
         OutStr.WriteText('--' + Boundary + CrLf);
         OutStr.WriteText('Content-Disposition: form-data; name="manifest"; filename="manifest.json"' + CrLf);
@@ -189,8 +204,6 @@ codeunit 70503 "AL Perf Auto Ship"
         OutStr.WriteText(CrLf);
         OutStr.WriteText(ManifestText);
 
-        // Profile
-        PerfProfile.Profile.CreateInStream(ProfileInStream);
         OutStr.WriteText(CrLf + '--' + Boundary + CrLf);
         OutStr.WriteText('Content-Disposition: form-data; name="profile"; filename="profile.alcpuprofile"' + CrLf);
         OutStr.WriteText('Content-Type: application/octet-stream' + CrLf);
