@@ -60,6 +60,23 @@ table 70503 "AL Perf Ship Setup"
                 Modify();
             end;
         }
+        field(80; "Canary Enabled"; Boolean)
+        {
+            Caption = 'Canary Enabled';
+            DataClassification = SystemMetadata;
+        }
+        field(90; "Canary Workload Codeunit ID"; Integer)
+        {
+            Caption = 'Canary Workload Codeunit ID';
+            DataClassification = SystemMetadata;
+            TableRelation = AllObjWithCaption."Object ID" where("Object Type" = const(Codeunit));
+            BlankZero = true;
+        }
+        field(100; "Canary Description"; Text[250])
+        {
+            Caption = 'Canary Description';
+            DataClassification = SystemMetadata;
+        }
     }
 
     keys

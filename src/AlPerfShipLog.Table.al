@@ -58,6 +58,11 @@ table 70504 "AL Perf Ship Log"
             Caption = 'Server Profile ID';
             DataClassification = SystemMetadata;
         }
+        field(100; Canary; Boolean)
+        {
+            Caption = 'Canary';
+            DataClassification = SystemMetadata;
+        }
     }
 
     keys

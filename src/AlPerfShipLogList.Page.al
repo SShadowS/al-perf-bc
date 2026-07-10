@@ -16,6 +16,7 @@ page 70504 "AL Perf Ship Log List"
             {
                 field("Starting Date-Time"; Rec."Starting Date-Time") { ApplicationArea = All; }
                 field("Activity Description"; Rec."Activity Description") { ApplicationArea = All; }
+                field(Canary; Rec.Canary) { ApplicationArea = All; }
                 field(Status; Rec.Status) { ApplicationArea = All; StyleExpr = StatusStyleExpr; }
                 field("Shipped At"; Rec."Shipped At") { ApplicationArea = All; }
                 field("HTTP Status"; Rec."HTTP Status") { ApplicationArea = All; }
