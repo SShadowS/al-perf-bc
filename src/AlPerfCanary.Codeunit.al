@@ -6,6 +6,7 @@ codeunit 70505 "AL Perf Canary"
     var
         ServerUrlMissingErr: Label 'Server URL Base is not configured on the AL Perf Ship Setup card.';
         TenantCodeMissingErr: Label 'Tenant Code is not configured on the AL Perf Ship Setup card.';
+        AlreadyRecordingErr: Label 'A performance profiler recording is already in progress. Stop it before running the canary.';
 
     trigger OnRun()
     begin
@@ -55,6 +56,8 @@ codeunit 70505 "AL Perf Canary"
         // open, and GetOrCreate may have inserted the setup record just now.
         Commit();
 
+        if Profiler.IsRecordingInProgress() then
+            Error(AlreadyRecordingErr);
         Profiler.Start("Sampling Interval"::SampleEvery50ms);
         WorkloadOk := Codeunit.Run(WorkloadId);
         if not WorkloadOk then
