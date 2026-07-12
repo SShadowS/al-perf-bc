@@ -70,7 +70,7 @@ codeunit 70503 "AL Perf Auto Ship"
     begin
         ShipLog.SetRange(Status, ShipLog.Status::Failed);
         ShipLog.SetFilter(Attempts, '<%1', MaxRetryAttempts());
-        if ShipLog.FindSet() then
+        if ShipLog.FindSet(true) then
             repeat
                 if RetryShipLogRow(Setup, ShipLog) then
                     RetriedCount += 1
@@ -132,8 +132,16 @@ codeunit 70503 "AL Perf Auto Ship"
 
         PerfProfile.CalcFields(Profile);
         if not PerfProfile.Profile.HasValue() then begin
+            // An empty blob on a still-existing Performance Profiles record doesn't
+            // resolve itself on a later retry — same permanent-failure treatment as a
+            // deleted/never-persisted source record (RetryShipLogRow), and for the same
+            // reason: without this, the age-independent sweep would re-select this row
+            // every run forever (Attempts never reaches the cap because this branch
+            // returns before ever reaching ShipProfile, the only place Attempts
+            // increments).
             ShipLog.Status := ShipLog.Status::Failed;
-            ShipLog."Error Message" := 'Profile blob empty';
+            ShipLog."Error Message" := 'Profile blob empty — permanently failed, will not retry.';
+            ShipLog.Attempts := MaxRetryAttempts();
             ShipLog.Modify();
             LogShipFailure(ShipLog);
             exit(false);
