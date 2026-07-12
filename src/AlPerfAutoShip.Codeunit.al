@@ -9,6 +9,10 @@ codeunit 70503 "AL Perf Auto Ship"
         TenantTokenKeyTok: Label 'al-perf-tenant-token', Locked = true;
         ShipSucceededTelemetryMsg: Label 'AL Perf profile shipped.', Locked = true;
         ShipFailedTelemetryMsg: Label 'AL Perf profile ship failed.', Locked = true;
+        ReasonConnectionTok: Label 'connection', Locked = true;
+        ReasonHttpTok: Label 'http', Locked = true;
+        ReasonTombstoneTok: Label 'tombstone', Locked = true;
+        ReasonEmptyBlobTok: Label 'emptyblob', Locked = true;
 
     trigger OnRun()
     begin
@@ -110,9 +114,10 @@ codeunit 70503 "AL Perf Auto Ship"
 
         ShipLog.Status := ShipLog.Status::Failed;
         ShipLog."Error Message" := 'Source profile is no longer available — permanently failed, will not retry.';
+        ShipLog."HTTP Status" := 0; // no HTTP call happened this attempt — don't carry a stale status from an earlier one
         ShipLog.Attempts := MaxRetryAttempts();
         ShipLog.Modify();
-        LogShipFailure(ShipLog);
+        LogShipFailure(ShipLog, ReasonTombstoneTok);
         exit(false);
     end;
 
@@ -141,9 +146,10 @@ codeunit 70503 "AL Perf Auto Ship"
             // increments).
             ShipLog.Status := ShipLog.Status::Failed;
             ShipLog."Error Message" := 'Profile blob empty — permanently failed, will not retry.';
+            ShipLog."HTTP Status" := 0; // no HTTP call happened this attempt — don't carry a stale status from an earlier one
             ShipLog.Attempts := MaxRetryAttempts();
             ShipLog.Modify();
-            LogShipFailure(ShipLog);
+            LogShipFailure(ShipLog, ReasonEmptyBlobTok);
             exit(false);
         end;
 
@@ -240,7 +246,7 @@ codeunit 70503 "AL Perf Auto Ship"
             ShipLog.Status := ShipLog.Status::Failed;
             ShipLog."Error Message" := CopyStr(StrSubstNo('Connection failed to %1', Url), 1, 500);
             ShipLog.Modify();
-            LogShipFailure(ShipLog);
+            LogShipFailure(ShipLog, ReasonConnectionTok);
             exit(false);
         end;
 
@@ -261,7 +267,7 @@ codeunit 70503 "AL Perf Auto Ship"
         ShipLog.Status := ShipLog.Status::Failed;
         ShipLog."Error Message" := CopyStr(ResponseText, 1, 500);
         ShipLog.Modify();
-        LogShipFailure(ShipLog);
+        LogShipFailure(ShipLog, ReasonHttpTok);
         exit(false);
     end;
 
@@ -276,7 +282,7 @@ codeunit 70503 "AL Perf Auto Ship"
         Session.LogMessage('ALP0002', ShipSucceededTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
     end;
 
-    local procedure LogShipFailure(ShipLog: Record "AL Perf Ship Log")
+    local procedure LogShipFailure(ShipLog: Record "AL Perf Ship Log"; Reason: Text)
     var
         Dimensions: Dictionary of [Text, Text];
     begin
@@ -285,6 +291,7 @@ codeunit 70503 "AL Perf Auto Ship"
         if ShipLog."HTTP Status" <> 0 then
             Dimensions.Add('HttpStatus', Format(ShipLog."HTTP Status"));
         Dimensions.Add('Attempts', Format(ShipLog.Attempts));
+        Dimensions.Add('Reason', Reason);
         Session.LogMessage('ALP0003', ShipFailedTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
     end;
 

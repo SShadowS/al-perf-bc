@@ -40,6 +40,7 @@ codeunit 70505 "AL Perf Canary"
         WorkloadOk: Boolean;
         WorkloadError: Text;
         CanaryDescription: Text;
+        JitterSeconds: Integer;
     begin
         Setup := Setup.GetOrCreate();
         if not Setup."Canary Enabled" then
@@ -64,17 +65,21 @@ codeunit 70505 "AL Perf Canary"
         if Profiler.IsRecordingInProgress() then
             Error(AlreadyRecordingErr);
 
+        ActivityId := CreateGuid();
+
         // Jitter only delays the scheduled path, and only after the guards above —
         // a guarded early exit (disabled, misconfigured, already recording) must
-        // never sleep pointlessly.
-        if Scheduled then
-            ApplyJitter(Setup."Canary Jitter (max minutes)");
+        // never sleep pointlessly. ALP0001 fires before the sleep (carrying the
+        // rolled jitter) so a Job Queue watchdog kill mid-sleep still leaves a
+        // breadcrumb, instead of looking indistinguishable from "never ran".
+        if Scheduled then begin
+            JitterSeconds := RollJitterSeconds(Setup."Canary Jitter (max minutes)");
+            LogCanaryStart(ActivityId, CanaryDescription, JitterSeconds);
+            if JitterSeconds > 0 then
+                Sleep(JitterSeconds * 1000);
+        end;
 
-        ActivityId := CreateGuid();
         StartDateTime := CurrentDateTime;
-
-        if Scheduled then
-            LogCanaryStart(ActivityId, CanaryDescription);
 
         Profiler.Start("Sampling Interval"::SampleEvery50ms);
         WorkloadOk := Codeunit.Run(WorkloadId);
@@ -104,23 +109,24 @@ codeunit 70505 "AL Perf Canary"
         AutoShip.ShipProfile(Setup, ShipLog, ManifestJson, ProfileInStream);
     end;
 
-    local procedure ApplyJitter(MaxJitterMinutes: Integer)
+    local procedure RollJitterSeconds(MaxJitterMinutes: Integer): Integer
     begin
         if MaxJitterMinutes <= 0 then
-            exit;
+            exit(0);
         // Random() runs from a fixed seed until reseeded; each Job Queue run is a
         // fresh session, so without this every run (and every tenant) would sleep
         // the same duration — no fleet desynchronization.
         Randomize();
-        Sleep(Random(MaxJitterMinutes * 60) * 1000);
+        exit(Random(MaxJitterMinutes * 60));
     end;
 
-    local procedure LogCanaryStart(ActivityId: Guid; CanaryDescription: Text)
+    local procedure LogCanaryStart(ActivityId: Guid; CanaryDescription: Text; JitterSeconds: Integer)
     var
         Dimensions: Dictionary of [Text, Text];
     begin
         Dimensions.Add('ActivityId', LowerCase(DelChr(Format(ActivityId), '=', '{}')));
         Dimensions.Add('ActivityDescription', CanaryDescription);
+        Dimensions.Add('JitterSeconds', Format(JitterSeconds));
         Session.LogMessage('ALP0001', CanaryRunStartedTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
     end;
 }

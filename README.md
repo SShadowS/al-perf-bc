@@ -118,6 +118,12 @@ a random duration up to that many minutes before it starts profiling, spreading 
 out instead of bursting. It only applies to the Job Queue path — **Run Canary Now** always
 runs immediately.
 
+The default of 10 applies both to fresh installs (field `InitValue`) and to existing
+installs upgrading into this version — `AL Perf Upgrade` (upgrade codeunit, runs once per
+company) backfills any setup row still at 0 up to 10, since a pre-existing setup row
+doesn't pick up a new field's `InitValue`. A tenant that deliberately sets jitter back to
+0 afterwards is not touched again by a later upgrade.
+
 Pick jitter for **off-peak** windows: schedule the canary Job Queue entry outside your
 tenants' business hours where possible, and use jitter to smooth out whatever burst
 remains rather than as a substitute for off-peak scheduling.
@@ -155,13 +161,16 @@ Insights, without token or server URL credentials ever appearing in the dimensio
 
 | Event ID | Meaning | Fired from |
 |----------|---------|------------|
-| `ALP0001` | Scheduled canary run started (Job Queue path only; `Run Canary Now` is silent) | `AL Perf Canary` |
+| `ALP0001` | Scheduled canary run started (Job Queue path only; `Run Canary Now` is silent). Fires **before** the jitter sleep, carrying `JitterSeconds` (the rolled duration, 0 if jitter is disabled), so a Job Queue watchdog kill mid-sleep still leaves a breadcrumb | `AL Perf Canary` |
 | `ALP0002` | Profile shipped successfully | `AL Perf Auto Ship` |
-| `ALP0003` | Ship attempt failed — dimensions include `Attempts`, the attempt number for that row | `AL Perf Auto Ship` |
+| `ALP0003` | Ship attempt failed — dimensions include `Attempts` (the attempt number for that row) and `Reason` (`connection` / `http` / `tombstone` / `emptyblob`) | `AL Perf Auto Ship` |
 
-All three carry `ActivityId` and `ActivityDescription`; `ALP0002`/`ALP0003` also carry
-`HttpStatus` when the server responded. Verbosity `Normal`, `DataClassification::SystemMetadata`,
-`TelemetryScope::ExtensionPublisher`.
+All three carry `ActivityId` and `ActivityDescription`; `ALP0001` also carries
+`JitterSeconds`; `ALP0002`/`ALP0003` also carry `HttpStatus` when an HTTP response was
+actually received for that attempt (never set for `ALP0003`'s `tombstone`/`emptyblob`
+reasons, since no HTTP call happens on those paths — and the row's `Error Message` is
+deliberately never carried into telemetry, to avoid leaking the server URL). Verbosity
+`Normal`, `DataClassification::SystemMetadata`, `TelemetryScope::ExtensionPublisher`.
 
 Example KQL to chart canary health across a fleet in Application Insights (adjust the
 `aadTenantId` dimension name to whatever your workspace surfaces):
