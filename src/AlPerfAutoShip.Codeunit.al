@@ -245,6 +245,7 @@ codeunit 70503 "AL Perf Auto Ship"
         if not Client.Send(RequestMsg, ResponseMsg) then begin
             ShipLog.Status := ShipLog.Status::Failed;
             ShipLog."Error Message" := CopyStr(StrSubstNo('Connection failed to %1', Url), 1, 500);
+            ShipLog."HTTP Status" := 0; // no HTTP call happened this attempt — don't carry a stale status from an earlier one
             ShipLog.Modify();
             LogShipFailure(ShipLog, ReasonConnectionTok);
             exit(false);

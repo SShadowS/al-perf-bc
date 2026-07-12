@@ -34,9 +34,11 @@ codeunit 70507 "AL Perf Upgrade"
     [EventSubscriber(ObjectType::Codeunit, Codeunit::"Upgrade Tag", 'OnGetPerCompanyUpgradeTags', '', false, false)]
     local procedure RegisterPerCompanyUpgradeTags(var PerCompanyUpgradeTags: List of [Code[250]])
     begin
-        // New companies (and new installs) start from InitValue = 10 already, so the
-        // backfill logic above does not apply to them — registering the tag here
-        // marks it pre-applied for newly-created companies.
+        // Pre-seeds the tag as already-applied for a NEWLY CREATED company (it starts
+        // from InitValue = 10 already, so the backfill above does not apply to it).
+        // This does NOT cover installing this app fresh into an EXISTING company — that
+        // path is handled by AL Perf Install (OnInstallAppPerCompany), which marks all
+        // tags applied on a genuinely fresh install.
         PerCompanyUpgradeTags.Add(CanaryJitterDefaultUpgradeTag());
     end;
 
