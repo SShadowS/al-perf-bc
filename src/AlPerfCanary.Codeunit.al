@@ -108,6 +108,10 @@ codeunit 70505 "AL Perf Canary"
     begin
         if MaxJitterMinutes <= 0 then
             exit;
+        // Random() runs from a fixed seed until reseeded; each Job Queue run is a
+        // fresh session, so without this every run (and every tenant) would sleep
+        // the same duration — no fleet desynchronization.
+        Randomize();
         Sleep(Random(MaxJitterMinutes * 60) * 1000);
     end;
 
