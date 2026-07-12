@@ -7,17 +7,25 @@ codeunit 70505 "AL Perf Canary"
         ServerUrlMissingErr: Label 'Server URL Base is not configured on the AL Perf Ship Setup card.';
         TenantCodeMissingErr: Label 'Tenant Code is not configured on the AL Perf Ship Setup card.';
         AlreadyRecordingErr: Label 'A performance profiler recording is already in progress. Stop it before running the canary.';
+        CanaryRunStartedTelemetryMsg: Label 'AL Perf canary run started.', Locked = true;
 
     trigger OnRun()
     begin
-        RunNow();
+        RunCanary(true);
     end;
 
-    /// Run once for the current session — used both from Job Queue and manual invocation.
+    /// Manual invocation (e.g. the "Run Canary Now" page action) — always runs
+    /// immediately, without scheduling jitter or the ALP0001 breadcrumb.
+    procedure RunNow()
+    begin
+        RunCanary(false);
+    end;
+
     /// Profiles this session with cu1924 while the configured workload runs, then ships
     /// the profile through the shared ShipProfile transport. Cloud-safe: no scheduler
-    /// table references.
-    procedure RunNow()
+    /// table references. Scheduled = true only for the Job Queue (OnRun) path: applies
+    /// the configured scheduling jitter and emits the ALP0001 telemetry breadcrumb.
+    local procedure RunCanary(Scheduled: Boolean)
     var
         Setup: Record "AL Perf Ship Setup";
         ShipLog: Record "AL Perf Ship Log";
@@ -49,15 +57,25 @@ codeunit 70505 "AL Perf Canary"
         if CanaryDescription = '' then
             CanaryDescription := StrSubstNo('Canary workload %1', WorkloadId);
 
-        ActivityId := CreateGuid();
-        StartDateTime := CurrentDateTime;
-
         // Conditional Codeunit.Run is rejected while a write transaction is
         // open, and GetOrCreate may have inserted the setup record just now.
         Commit();
 
         if Profiler.IsRecordingInProgress() then
             Error(AlreadyRecordingErr);
+
+        // Jitter only delays the scheduled path, and only after the guards above —
+        // a guarded early exit (disabled, misconfigured, already recording) must
+        // never sleep pointlessly.
+        if Scheduled then
+            ApplyJitter(Setup."Canary Jitter (max minutes)");
+
+        ActivityId := CreateGuid();
+        StartDateTime := CurrentDateTime;
+
+        if Scheduled then
+            LogCanaryStart(ActivityId, CanaryDescription);
+
         Profiler.Start("Sampling Interval"::SampleEvery50ms);
         WorkloadOk := Codeunit.Run(WorkloadId);
         if not WorkloadOk then
@@ -84,5 +102,21 @@ codeunit 70505 "AL Perf Canary"
         ShipLog.Insert();
 
         AutoShip.ShipProfile(Setup, ShipLog, ManifestJson, ProfileInStream);
+    end;
+
+    local procedure ApplyJitter(MaxJitterMinutes: Integer)
+    begin
+        if MaxJitterMinutes <= 0 then
+            exit;
+        Sleep(Random(MaxJitterMinutes * 60) * 1000);
+    end;
+
+    local procedure LogCanaryStart(ActivityId: Guid; CanaryDescription: Text)
+    var
+        Dimensions: Dictionary of [Text, Text];
+    begin
+        Dimensions.Add('ActivityId', LowerCase(DelChr(Format(ActivityId), '=', '{}')));
+        Dimensions.Add('ActivityDescription', CanaryDescription);
+        Session.LogMessage('ALP0001', CanaryRunStartedTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
     end;
 }

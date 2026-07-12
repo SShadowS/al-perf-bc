@@ -45,6 +45,7 @@ page 70503 "AL Perf Ship Setup Card"
                 field("Canary Enabled"; Rec."Canary Enabled") { ApplicationArea = All; ToolTip = 'Enables the self-profiling canary. Independent of the Enabled switch above: that gates the OnPrem-only scheduler path, while the canary also works in SaaS.'; }
                 field("Canary Workload Codeunit ID"; Rec."Canary Workload Codeunit ID") { ApplicationArea = All; ToolTip = 'Codeunit executed under the profiler. Leave 0 to use the built-in AL Perf Canary Workload.'; }
                 field("Canary Description"; Rec."Canary Description") { ApplicationArea = All; ToolTip = 'Activity description stamped on canary profiles shipped to the server.'; }
+                field("Canary Jitter (max minutes)"; Rec."Canary Jitter (max minutes)") { ApplicationArea = All; ToolTip = 'Random start delay applied before the scheduled (Job Queue) canary run, up to this many minutes. Desynchronizes a fleet of tenants scheduled on the same clock-aligned hour. 0 disables jitter. Does not affect Run Canary Now.'; }
             }
         }
     }

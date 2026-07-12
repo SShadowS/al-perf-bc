@@ -7,6 +7,8 @@ codeunit 70503 "AL Perf Auto Ship"
         CrLf: Text[2];
         BearerSecretKeyTok: Label 'al-perf-poc-bearer-secret', Locked = true;
         TenantTokenKeyTok: Label 'al-perf-tenant-token', Locked = true;
+        ShipSucceededTelemetryMsg: Label 'AL Perf profile shipped.', Locked = true;
+        ShipFailedTelemetryMsg: Label 'AL Perf profile ship failed.', Locked = true;
 
     trigger OnRun()
     begin
@@ -70,6 +72,7 @@ codeunit 70503 "AL Perf Auto Ship"
             ShipLog.Status := ShipLog.Status::Failed;
             ShipLog."Error Message" := 'Profile blob empty';
             ShipLog.Modify();
+            LogShipFailure(ShipLog);
             exit(false);
         end;
 
@@ -162,6 +165,7 @@ codeunit 70503 "AL Perf Auto Ship"
             ShipLog.Status := ShipLog.Status::Failed;
             ShipLog."Error Message" := CopyStr(StrSubstNo('Connection failed to %1', Url), 1, 500);
             ShipLog.Modify();
+            LogShipFailure(ShipLog);
             exit(false);
         end;
 
@@ -175,13 +179,37 @@ codeunit 70503 "AL Perf Auto Ship"
             if StrLen(ResponseText) <= 100 then
                 ShipLog."Server Profile ID" := CopyStr(ResponseText, 1, 100);
             ShipLog.Modify();
+            LogShipSuccess(ShipLog);
             exit(true);
         end;
 
         ShipLog.Status := ShipLog.Status::Failed;
         ShipLog."Error Message" := CopyStr(ResponseText, 1, 500);
         ShipLog.Modify();
+        LogShipFailure(ShipLog);
         exit(false);
+    end;
+
+    local procedure LogShipSuccess(ShipLog: Record "AL Perf Ship Log")
+    var
+        Dimensions: Dictionary of [Text, Text];
+    begin
+        Dimensions.Add('ActivityId', LowerCase(DelChr(Format(ShipLog."Activity ID"), '=', '{}')));
+        Dimensions.Add('ActivityDescription', ShipLog."Activity Description");
+        if ShipLog."HTTP Status" <> 0 then
+            Dimensions.Add('HttpStatus', Format(ShipLog."HTTP Status"));
+        Session.LogMessage('ALP0002', ShipSucceededTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
+    end;
+
+    local procedure LogShipFailure(ShipLog: Record "AL Perf Ship Log")
+    var
+        Dimensions: Dictionary of [Text, Text];
+    begin
+        Dimensions.Add('ActivityId', LowerCase(DelChr(Format(ShipLog."Activity ID"), '=', '{}')));
+        Dimensions.Add('ActivityDescription', ShipLog."Activity Description");
+        if ShipLog."HTTP Status" <> 0 then
+            Dimensions.Add('HttpStatus', Format(ShipLog."HTTP Status"));
+        Session.LogMessage('ALP0003', ShipFailedTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
     end;
 
     local procedure BuildMultipartBody(ManifestJson: JsonObject; ProfileInStream: InStream; var TempBlob: Codeunit "Temp Blob"; var ContentType: Text)
