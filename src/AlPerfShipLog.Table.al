@@ -63,6 +63,12 @@ table 70504 "AL Perf Ship Log"
             Caption = 'Canary';
             DataClassification = SystemMetadata;
         }
+        field(110; Attempts; Integer)
+        {
+            Caption = 'Attempts';
+            Editable = false;
+            DataClassification = SystemMetadata;
+        }
     }
 
     keys

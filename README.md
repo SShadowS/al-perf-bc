@@ -98,9 +98,91 @@ Open `AL Perf Ship Setup Card` page → set Tenant Code, Server URL Base, and th
 
 Wire a Job Queue Entry to Codeunit 70503 `AL Perf Auto Ship` to run every 5 min.
 
-Decrypt + view: `AL Perf Ship Log List` page → Open Profile.
+Decrypt + view: `AL Perf Ship Log List` page → Open Profile. Failed rows can be retried
+individually from that page (**Retry Now**), or wait for the automatic sweep described
+below.
 
 See [docs/superpowers/specs/2026-04-13-poc-scope.md](https://github.com/SShadowS/al-perf/blob/master/docs/superpowers/specs/2026-04-13-poc-scope.md) in the al-perf repo for scope, limits, and roadmap.
+
+### Fleet Scheduling & Canary Health
+
+The self-profiling canary (`AL Perf Canary` codeunit, `Canary` group on the setup card)
+is designed to run unattended across a fleet of tenants on a shared Job Queue cadence
+(e.g. hourly). Two things harden that for fleet-scale, unattended operation:
+
+**Scheduling jitter.** BC Job Queues fire clock-aligned — a fleet scheduled "every hour
+on the hour" all wakes up in the same few seconds, and all canaries would hit the al-perf
+ingest endpoint in one burst. `"Canary Jitter (max minutes)"` (setup card, Canary group,
+default 10, 0 disables it, capped at 55) makes the scheduled (Job Queue) canary run sleep
+a random duration up to that many minutes before it starts profiling, spreading the fleet
+out instead of bursting. It only applies to the Job Queue path — **Run Canary Now** always
+runs immediately.
+
+Pick jitter for **off-peak** windows: schedule the canary Job Queue entry outside your
+tenants' business hours where possible, and use jitter to smooth out whatever burst
+remains rather than as a substitute for off-peak scheduling.
+
+> **Job Queue timeout headroom.** A scheduled canary run can burn up to the full jitter
+> window in `Sleep()` *before* it captures anything — with the default 10 min that's
+> usually negligible, but if jitter is turned up toward its 55-minute cap, budget for it.
+> The Job Queue entry's execution timeout needs headroom for **jitter + workload run time
+> + ship time**, not just the workload and ship. If the timeout doesn't budget for the
+> sleep, a long jitter roll can get the run killed by the Job Queue watchdog before it
+> ever starts profiling.
+
+**Retry semantics.** Every ship attempt (first try, automatic retry, or manual **Retry
+Now**) goes through the same transport (`AL Perf Auto Ship.ShipProfile`) and increments
+`Attempts` on the `AL Perf Ship Log` row. Each `ShipPending` run (i.e. each Job Queue
+tick of `AL Perf Auto Ship`) first sweeps all `Failed` rows with `Attempts < 5` and
+re-ships them, *then* processes newly-pending profiles as before — so a backlog of
+failures catches up over the next few scheduled runs instead of only being retried while
+it's still inside the current run's lookback window.
+
+There is no timer-based backoff inside AL — the Job Queue's own run cadence *is* the
+backoff. A 5-minute cadence retries a failure roughly every 5 minutes (bounded by the
+5-attempt cap); a coarser cadence backs off further for free. If a row's source
+`Performance Profiles` record is gone by retry time — deleted (e.g. profiler data
+retention cleanup) or, for canary rows, never persisted at all since a canary ships an
+in-memory profile that only exists for the duration of its own session — there is nothing
+left to re-ship. That row is marked permanently failed with a distinct error message and
+`Attempts` is pinned at the cap so the sweep stops re-examining it, rather than retrying
+(and re-failing) it forever. **Retry Now** re-ships a single `Failed` row on demand and is
+not subject to the cap.
+
+**Telemetry breadcrumbs.** `AL Perf Canary` and `AL Perf Auto Ship` emit
+`Session.LogMessage` events so fleet operators can see canary health in their own App
+Insights, without token or server URL credentials ever appearing in the dimensions:
+
+| Event ID | Meaning | Fired from |
+|----------|---------|------------|
+| `ALP0001` | Scheduled canary run started (Job Queue path only; `Run Canary Now` is silent) | `AL Perf Canary` |
+| `ALP0002` | Profile shipped successfully | `AL Perf Auto Ship` |
+| `ALP0003` | Ship attempt failed — dimensions include `Attempts`, the attempt number for that row | `AL Perf Auto Ship` |
+
+All three carry `ActivityId` and `ActivityDescription`; `ALP0002`/`ALP0003` also carry
+`HttpStatus` when the server responded. Verbosity `Normal`, `DataClassification::SystemMetadata`,
+`TelemetryScope::ExtensionPublisher`.
+
+Example KQL to chart canary health across a fleet in Application Insights (adjust the
+`aadTenantId` dimension name to whatever your workspace surfaces):
+
+```kql
+traces
+| where customDimensions.eventId in ("ALP0001", "ALP0002", "ALP0003")
+| extend
+    tenant = tostring(customDimensions.aadTenantId),
+    activityId = tostring(customDimensions.ActivityId),
+    attempts = toint(customDimensions.Attempts),
+    httpStatus = toint(customDimensions.HttpStatus)
+| summarize
+    Started = countif(customDimensions.eventId == "ALP0001"),
+    Shipped = countif(customDimensions.eventId == "ALP0002"),
+    Failed  = countif(customDimensions.eventId == "ALP0003"),
+    MaxAttempts = max(attempts)
+    by tenant, bin(timestamp, 1h)
+| extend FailureRate = round(100.0 * Failed / iif(Shipped + Failed == 0, 1, Shipped + Failed), 1)
+| order by timestamp desc, FailureRate desc
+```
 
 ## License
 
