@@ -6,3 +6,5 @@
 *.app
 rad.json
 .serena/
+
+.superpowers/

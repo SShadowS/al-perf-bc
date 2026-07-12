@@ -22,6 +22,7 @@ page 70504 "AL Perf Ship Log List"
                 field("HTTP Status"; Rec."HTTP Status") { ApplicationArea = All; }
                 field("Error Message"; Rec."Error Message") { ApplicationArea = All; }
                 field("Profile Size (bytes)"; Rec."Profile Size (bytes)") { ApplicationArea = All; }
+                field(Attempts; Rec.Attempts) { ApplicationArea = All; }
                 field("Activity ID"; Rec."Activity ID") { ApplicationArea = All; Visible = false; }
                 field("Schedule ID"; Rec."Schedule ID") { ApplicationArea = All; Visible = false; }
             }
@@ -46,6 +47,24 @@ page 70504 "AL Perf Ship Log List"
                     AutoShip: Codeunit "AL Perf Auto Ship";
                 begin
                     AutoShip.OpenProfile(Rec);
+                end;
+            }
+
+            action(RetryNow)
+            {
+                Caption = 'Retry Now';
+                ApplicationArea = All;
+                Image = Refresh;
+                Promoted = true;
+                PromotedCategory = Process;
+                PromotedIsBig = true;
+
+                trigger OnAction()
+                var
+                    AutoShip: Codeunit "AL Perf Auto Ship";
+                begin
+                    AutoShip.RetryOne(Rec);
+                    CurrPage.Update(false);
                 end;
             }
         }

@@ -7,6 +7,12 @@ codeunit 70503 "AL Perf Auto Ship"
         CrLf: Text[2];
         BearerSecretKeyTok: Label 'al-perf-poc-bearer-secret', Locked = true;
         TenantTokenKeyTok: Label 'al-perf-tenant-token', Locked = true;
+        ShipSucceededTelemetryMsg: Label 'AL Perf profile shipped.', Locked = true;
+        ShipFailedTelemetryMsg: Label 'AL Perf profile ship failed.', Locked = true;
+        ReasonConnectionTok: Label 'connection', Locked = true;
+        ReasonHttpTok: Label 'http', Locked = true;
+        ReasonTombstoneTok: Label 'tombstone', Locked = true;
+        ReasonEmptyBlobTok: Label 'emptyblob', Locked = true;
 
     trigger OnRun()
     begin
@@ -22,38 +28,102 @@ codeunit 70503 "AL Perf Auto Ship"
         WindowStart: DateTime;
         ShippedCount: Integer;
         FailedCount: Integer;
+        RetriedCount: Integer;
     begin
         Setup := Setup.GetOrCreate();
         if not Setup.Enabled then
             exit;
+
+        // Sweep FAILED rows (any age, not just this run's window) before shipping new
+        // profiles, so a stuck fleet catches up on backlog every run instead of only
+        // retrying failures that happen to still fall inside the window below.
+        RetryFailedShipments(Setup, RetriedCount, FailedCount);
 
         if Setup."Last Run DateTime" = 0DT then
             WindowStart := CurrentDateTime - 24 * 60 * 60 * 1000  // first run: 24h backfill
         else
             WindowStart := Setup."Last Run DateTime" - 60 * 60 * 1000; // 1h overlap
 
+        // Only genuinely new profiles here — Failed retries (any age) are handled by
+        // the RetryFailedShipments sweep above, so this loop no longer needs its own
+        // Failed-in-window branch.
         PerfProfiles.SetFilter("Starting Date-Time", '>=%1', WindowStart);
         if PerfProfiles.FindSet() then
             repeat
-                if not ShipLog.Get(PerfProfiles."Activity ID") then begin
+                if not ShipLog.Get(PerfProfiles."Activity ID") then
                     if ShipOne(Setup, PerfProfiles) then
                         ShippedCount += 1
                     else
                         FailedCount += 1;
-                end else
-                    if ShipLog.Status = ShipLog.Status::Failed then
-                        if ShipOne(Setup, PerfProfiles) then
-                            ShippedCount += 1
-                        else
-                            FailedCount += 1;
             until PerfProfiles.Next() = 0;
 
         Setup."Last Run DateTime" := CurrentDateTime;
         if FailedCount > 0 then
-            Setup."Last Error" := StrSubstNo('Shipped %1, failed %2 in last run', ShippedCount, FailedCount)
+            Setup."Last Error" := StrSubstNo('Shipped %1, retried %2, failed %3 in last run', ShippedCount, RetriedCount, FailedCount)
         else
             Setup."Last Error" := '';
         Setup.Modify();
+    end;
+
+    /// D2 retry sweep: FAILED rows below the attempt cap are re-shipped via the same
+    /// ShipProfile transport ShipOne uses. Runs before new-profile processing so a
+    /// backlog catches up every ShipPending call, independent of the window below.
+    local procedure RetryFailedShipments(Setup: Record "AL Perf Ship Setup"; var RetriedCount: Integer; var FailedCount: Integer)
+    var
+        ShipLog: Record "AL Perf Ship Log";
+    begin
+        ShipLog.SetRange(Status, ShipLog.Status::Failed);
+        ShipLog.SetFilter(Attempts, '<%1', MaxRetryAttempts());
+        if ShipLog.FindSet(true) then
+            repeat
+                if RetryShipLogRow(Setup, ShipLog) then
+                    RetriedCount += 1
+                else
+                    FailedCount += 1;
+            until ShipLog.Next() = 0;
+    end;
+
+    /// Manual "Retry Now" page action — same re-ship path as the sweep, uncapped
+    /// (an operator's deliberate click is allowed to retry a row the automatic sweep
+    /// has already given up on). Resets nothing on ShipLog before retrying.
+    procedure RetryOne(var ShipLog: Record "AL Perf Ship Log")
+    var
+        Setup: Record "AL Perf Ship Setup";
+        NotFailedErr: Label 'Only a Failed shipment can be retried.';
+    begin
+        if ShipLog.Status <> ShipLog.Status::Failed then
+            Error(NotFailedErr);
+        Setup := Setup.GetOrCreate();
+        RetryShipLogRow(Setup, ShipLog);
+    end;
+
+    /// Shared by the sweep and the manual retry action. The source Performance
+    /// Profiles record can be gone by retry time — deleted, or (for canary rows)
+    /// never persisted in the first place, since the canary ships an in-memory
+    /// profile that only ever existed for the duration of its own session. Either
+    /// way there is nothing left to re-ship, so this is a permanent failure: pin
+    /// Attempts at the cap so the sweep never re-examines the row again, rather than
+    /// re-attempting (and re-failing) it every run forever.
+    local procedure RetryShipLogRow(Setup: Record "AL Perf Ship Setup"; var ShipLog: Record "AL Perf Ship Log"): Boolean
+    var
+        PerfProfile: Record "Performance Profiles";
+    begin
+        PerfProfile.SetRange("Activity ID", ShipLog."Activity ID");
+        if PerfProfile.FindFirst() then
+            exit(ShipOne(Setup, PerfProfile));
+
+        ShipLog.Status := ShipLog.Status::Failed;
+        ShipLog."Error Message" := 'Source profile is no longer available — permanently failed, will not retry.';
+        ShipLog."HTTP Status" := 0; // no HTTP call happened this attempt — don't carry a stale status from an earlier one
+        ShipLog.Attempts := MaxRetryAttempts();
+        ShipLog.Modify();
+        LogShipFailure(ShipLog, ReasonTombstoneTok);
+        exit(false);
+    end;
+
+    local procedure MaxRetryAttempts(): Integer
+    begin
+        exit(5);
     end;
 
     local procedure ShipOne(Setup: Record "AL Perf Ship Setup"; var PerfProfile: Record "Performance Profiles"): Boolean
@@ -67,9 +137,19 @@ codeunit 70503 "AL Perf Auto Ship"
 
         PerfProfile.CalcFields(Profile);
         if not PerfProfile.Profile.HasValue() then begin
+            // An empty blob on a still-existing Performance Profiles record doesn't
+            // resolve itself on a later retry — same permanent-failure treatment as a
+            // deleted/never-persisted source record (RetryShipLogRow), and for the same
+            // reason: without this, the age-independent sweep would re-select this row
+            // every run forever (Attempts never reaches the cap because this branch
+            // returns before ever reaching ShipProfile, the only place Attempts
+            // increments).
             ShipLog.Status := ShipLog.Status::Failed;
-            ShipLog."Error Message" := 'Profile blob empty';
+            ShipLog."Error Message" := 'Profile blob empty — permanently failed, will not retry.';
+            ShipLog."HTTP Status" := 0; // no HTTP call happened this attempt — don't carry a stale status from an earlier one
+            ShipLog.Attempts := MaxRetryAttempts();
             ShipLog.Modify();
+            LogShipFailure(ShipLog, ReasonEmptyBlobTok);
             exit(false);
         end;
 
@@ -120,10 +200,13 @@ codeunit 70503 "AL Perf Auto Ship"
         exit(true);
     end;
 
-    /// Transport core shared by the scheduler path (ShipOne) and the canary
-    /// (codeunit "AL Perf Canary"). ShipLog must already be inserted; its
+    /// Transport core shared by the scheduler path (ShipOne), the canary
+    /// (codeunit "AL Perf Canary"), and the D2 retry sweep/manual retry
+    /// (RetryShipLogRow/RetryOne). ShipLog must already be inserted; its
     /// "Activity ID" drives the idempotency header and must match
     /// ManifestJson.activityId. Never clears "Error Message" on success.
+    /// The single chokepoint every ship path (first try, sweep, manual) runs
+    /// through, so Attempts is incremented here — once per call, success or fail.
     internal procedure ShipProfile(Setup: Record "AL Perf Ship Setup"; var ShipLog: Record "AL Perf Ship Log"; ManifestJson: JsonObject; ProfileInStream: InStream): Boolean
     var
         BodyTempBlob: Codeunit "Temp Blob";
@@ -138,6 +221,7 @@ codeunit 70503 "AL Perf Auto Ship"
         StatusCode: Integer;
         Url: Text;
     begin
+        ShipLog.Attempts += 1;
         BuildMultipartBody(ManifestJson, ProfileInStream, BodyTempBlob, ContentType);
         BodyTempBlob.CreateInStream(BodyInStream);
 
@@ -161,7 +245,9 @@ codeunit 70503 "AL Perf Auto Ship"
         if not Client.Send(RequestMsg, ResponseMsg) then begin
             ShipLog.Status := ShipLog.Status::Failed;
             ShipLog."Error Message" := CopyStr(StrSubstNo('Connection failed to %1', Url), 1, 500);
+            ShipLog."HTTP Status" := 0; // no HTTP call happened this attempt — don't carry a stale status from an earlier one
             ShipLog.Modify();
+            LogShipFailure(ShipLog, ReasonConnectionTok);
             exit(false);
         end;
 
@@ -175,13 +261,39 @@ codeunit 70503 "AL Perf Auto Ship"
             if StrLen(ResponseText) <= 100 then
                 ShipLog."Server Profile ID" := CopyStr(ResponseText, 1, 100);
             ShipLog.Modify();
+            LogShipSuccess(ShipLog);
             exit(true);
         end;
 
         ShipLog.Status := ShipLog.Status::Failed;
         ShipLog."Error Message" := CopyStr(ResponseText, 1, 500);
         ShipLog.Modify();
+        LogShipFailure(ShipLog, ReasonHttpTok);
         exit(false);
+    end;
+
+    local procedure LogShipSuccess(ShipLog: Record "AL Perf Ship Log")
+    var
+        Dimensions: Dictionary of [Text, Text];
+    begin
+        Dimensions.Add('ActivityId', LowerCase(DelChr(Format(ShipLog."Activity ID"), '=', '{}')));
+        Dimensions.Add('ActivityDescription', ShipLog."Activity Description");
+        if ShipLog."HTTP Status" <> 0 then
+            Dimensions.Add('HttpStatus', Format(ShipLog."HTTP Status"));
+        Session.LogMessage('ALP0002', ShipSucceededTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
+    end;
+
+    local procedure LogShipFailure(ShipLog: Record "AL Perf Ship Log"; Reason: Text)
+    var
+        Dimensions: Dictionary of [Text, Text];
+    begin
+        Dimensions.Add('ActivityId', LowerCase(DelChr(Format(ShipLog."Activity ID"), '=', '{}')));
+        Dimensions.Add('ActivityDescription', ShipLog."Activity Description");
+        if ShipLog."HTTP Status" <> 0 then
+            Dimensions.Add('HttpStatus', Format(ShipLog."HTTP Status"));
+        Dimensions.Add('Attempts', Format(ShipLog.Attempts));
+        Dimensions.Add('Reason', Reason);
+        Session.LogMessage('ALP0003', ShipFailedTelemetryMsg, Verbosity::Normal, DataClassification::SystemMetadata, TelemetryScope::ExtensionPublisher, Dimensions);
     end;
 
     local procedure BuildMultipartBody(ManifestJson: JsonObject; ProfileInStream: InStream; var TempBlob: Codeunit "Temp Blob"; var ContentType: Text)

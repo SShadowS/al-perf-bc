@@ -77,6 +77,14 @@ table 70503 "AL Perf Ship Setup"
             Caption = 'Canary Description';
             DataClassification = SystemMetadata;
         }
+        field(110; "Canary Jitter (max minutes)"; Integer)
+        {
+            Caption = 'Canary Jitter (max minutes)';
+            DataClassification = SystemMetadata;
+            InitValue = 10;
+            MinValue = 0;
+            MaxValue = 55;
+        }
     }
 
     keys
